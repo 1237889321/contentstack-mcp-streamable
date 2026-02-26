@@ -26,14 +26,38 @@ try {
   mcpServerPath = _require.resolve("@contentstack/mcp");
 }
 
+const ENV_TO_ARG: Record<string, string> = {
+  CONTENTSTACK_API_KEY: "--stack-api-key",
+  CONTENTSTACK_DELIVERY_TOKEN: "--delivery-token",
+  CONTENTSTACK_ORGANIZATION_UID: "--organization-uid",
+  CONTENTSTACK_BRAND_KIT_ID: "--brand-kit-id",
+  CONTENTSTACK_LAUNCH_PROJECT_ID: "--launch-project-id",
+  CONTENTSTACK_PERSONALIZE_PROJECT_ID: "--personalize-project-id",
+  LYTICS_ACCESS_TOKEN: "--lytics-access-token",
+  GROUPS: "--groups",
+};
+
+function buildChildArgs(): string[] {
+  const args: string[] = [mcpServerPath];
+  for (const [envVar, cliFlag] of Object.entries(ENV_TO_ARG)) {
+    const value = process.env[envVar];
+    if (value) {
+      args.push(cliFlag, value);
+    }
+  }
+  return args;
+}
+
 let contentstackClient: Client;
 
 async function startContentstackClient(): Promise<Client> {
+  const args = buildChildArgs();
   console.log(`Spawning @contentstack/mcp from: ${mcpServerPath}`);
+  console.log(`  args: ${args.slice(1).join(" ")}`);
 
   const transport = new StdioClientTransport({
     command: "node",
-    args: [mcpServerPath],
+    args,
     stderr: "inherit",
   });
 
