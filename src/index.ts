@@ -26,44 +26,14 @@ try {
   mcpServerPath = _require.resolve("@contentstack/mcp");
 }
 
-const HEADER_TO_ENV: Record<string, string> = {
-  "x-contentstack-api-key": "CONTENTSTACK_API_KEY",
-  "x-contentstack-delivery-token": "CONTENTSTACK_DELIVERY_TOKEN",
-  "x-contentstack-brand-kit-id": "CONTENTSTACK_BRAND_KIT_ID",
-  "x-contentstack-launch-project-id": "CONTENTSTACK_LAUNCH_PROJECT_ID",
-  "x-contentstack-personalize-project-id": "CONTENTSTACK_PERSONALIZE_PROJECT_ID",
-  "x-lytics-access-token": "LYTICS_ACCESS_TOKEN",
-  "x-contentstack-groups": "GROUPS",
-};
+let contentstackClient: Client;
 
-interface Session {
-  transport: StreamableHTTPServerTransport;
-  client: Client;
-  mcpServer: McpServer;
-}
+async function startContentstackClient(): Promise<Client> {
+  console.log(`Spawning @contentstack/mcp from: ${mcpServerPath}`);
 
-const sessions: Record<string, Session> = {};
-
-function extractInputs(
-  headers: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [header, envVar] of Object.entries(HEADER_TO_ENV)) {
-    const value = headers[header];
-    if (typeof value === "string" && value.length > 0) {
-      env[envVar] = value;
-    }
-  }
-  return env;
-}
-
-async function spawnContentstackClient(
-  inputEnv: Record<string, string>,
-): Promise<Client> {
   const transport = new StdioClientTransport({
     command: "node",
     args: [mcpServerPath],
-    env: { ...process.env, ...inputEnv } as Record<string, string>,
     stderr: "inherit",
   });
 
@@ -76,7 +46,7 @@ async function spawnContentstackClient(
   return client;
 }
 
-function createProxyServer(client: Client): McpServer {
+function createProxyServer(): McpServer {
   const mcpServer = new McpServer(
     { name: "contentstack-mcp-streamable", version: "1.0.0" },
     { capabilities: { tools: {} } },
@@ -85,14 +55,14 @@ function createProxyServer(client: Client): McpServer {
   mcpServer.server.setRequestHandler(
     ListToolsRequestSchema,
     async (request) => {
-      return await client.listTools(request.params);
+      return await contentstackClient.listTools(request.params);
     },
   );
 
   mcpServer.server.setRequestHandler(
     CallToolRequestSchema,
     async (request) => {
-      return await client.callTool(
+      return await contentstackClient.callTool(
         request.params as {
           name: string;
           arguments?: Record<string, unknown>;
@@ -104,22 +74,16 @@ function createProxyServer(client: Client): McpServer {
   return mcpServer;
 }
 
-async function cleanupSession(sessionId: string) {
-  const session = sessions[sessionId];
-  if (!session) return;
-
-  try {
-    await session.client.close();
-  } catch (error) {
-    console.error(`Error closing client for session ${sessionId}:`, error);
-  }
-  delete sessions[sessionId];
-  console.log(`Session cleaned up: ${sessionId}`);
-}
-
 async function main() {
   console.log("Starting Contentstack MCP Streamable HTTP Server...");
-  console.log(`Resolved @contentstack/mcp at: ${mcpServerPath}`);
+
+  contentstackClient = await startContentstackClient();
+  console.log("Connected to @contentstack/mcp via stdio");
+
+  const { tools } = await contentstackClient.listTools();
+  console.log(
+    `Discovered ${tools.length} tools: ${tools.map((t) => t.name).join(", ")}`,
+  );
 
   const app = express();
   app.use(express.json());
@@ -133,10 +97,13 @@ async function main() {
     }),
   );
 
+  const transports: Record<string, StreamableHTTPServerTransport> = {};
+
   app.get("/health", (_req, res) => {
     res.json({
       status: "ok",
-      activeSessions: Object.keys(sessions).length,
+      toolCount: tools.length,
+      activeSessions: Object.keys(transports).length,
     });
   });
 
@@ -144,42 +111,31 @@ async function main() {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
     try {
-      if (sessionId && sessions[sessionId]) {
-        await sessions[sessionId].transport.handleRequest(req, res, req.body);
+      if (sessionId && transports[sessionId]) {
+        await transports[sessionId].handleRequest(req, res, req.body);
         return;
       }
 
       if (!sessionId && isInitializeRequest(req.body)) {
-        const inputEnv = extractInputs(req.headers);
-        const inputKeys = Object.keys(inputEnv);
-        console.log(
-          `New session with inputs: ${inputKeys.length > 0 ? inputKeys.join(", ") : "(none, using server env)"}`,
-        );
-
-        const client = await spawnContentstackClient(inputEnv);
-
-        const { tools } = await client.listTools();
-        console.log(`Session has ${tools.length} tools available`);
-
-        const mcpServer = createProxyServer(client);
-
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           enableJsonResponse: true,
           onsessioninitialized: (sid) => {
             console.log(`Session initialized: ${sid}`);
-            sessions[sid] = { transport, client, mcpServer };
+            transports[sid] = transport;
           },
         });
 
         transport.onclose = () => {
           const sid = transport.sessionId;
-          if (sid) {
-            cleanupSession(sid);
+          if (sid && transports[sid]) {
+            console.log(`Session closed: ${sid}`);
+            delete transports[sid];
           }
         };
 
-        await mcpServer.connect(transport);
+        const server = createProxyServer();
+        await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
         return;
       }
@@ -197,11 +153,7 @@ async function main() {
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: "2.0",
-          error: {
-            code: -32603,
-            message:
-              error instanceof Error ? error.message : "Internal server error",
-          },
+          error: { code: -32603, message: "Internal server error" },
           id: null,
         });
       }
@@ -210,13 +162,13 @@ async function main() {
 
   app.get("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !sessions[sessionId]) {
+    if (!sessionId || !transports[sessionId]) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
 
     try {
-      await sessions[sessionId].transport.handleRequest(req, res);
+      await transports[sessionId].handleRequest(req, res);
     } catch (error) {
       console.error("Error handling GET /mcp:", error);
       if (!res.headersSent) {
@@ -227,13 +179,13 @@ async function main() {
 
   app.delete("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !sessions[sessionId]) {
+    if (!sessionId || !transports[sessionId]) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
 
     try {
-      await sessions[sessionId].transport.handleRequest(req, res);
+      await transports[sessionId].handleRequest(req, res);
     } catch (error) {
       console.error("Error handling DELETE /mcp:", error);
       if (!res.headersSent) {
@@ -252,9 +204,15 @@ async function main() {
 
   const shutdown = async () => {
     console.log("\nShutting down...");
-    await Promise.all(
-      Object.keys(sessions).map((sid) => cleanupSession(sid)),
-    );
+    for (const sid of Object.keys(transports)) {
+      try {
+        await transports[sid].close();
+        delete transports[sid];
+      } catch (error) {
+        console.error(`Error closing session ${sid}:`, error);
+      }
+    }
+    await contentstackClient.close();
     server.close();
     console.log("Shutdown complete");
     process.exit(0);
@@ -266,5 +224,12 @@ async function main() {
 
 main().catch((err) => {
   console.error("Failed to start server:", err.message || err);
+  console.error(
+    "\nMake sure you have:\n" +
+      "  1. Set CONTENTSTACK_API_KEY in your .env file\n" +
+      "  2. Run `npm run auth` to complete OAuth setup\n" +
+      "  3. Configured the required env vars for your GROUPS\n" +
+      "\nSee README.md for details.",
+  );
   process.exit(1);
 });

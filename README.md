@@ -6,12 +6,12 @@ A Streamable HTTP transport wrapper for the [@contentstack/mcp](https://www.npmj
 
 This server acts as a transparent proxy:
 
-1. Accepts MCP client connections over Streamable HTTP
-2. Reads credentials from **request headers** (inputs) provided by the client
-3. Spawns a per-session `@contentstack/mcp` child process with those credentials
-4. Discovers all available tools and forwards calls transparently
+1. Spawns `@contentstack/mcp` as a child process communicating via stdio
+2. Discovers all available tools from the child process
+3. Exposes them over Streamable HTTP transport at a single `/mcp` endpoint
+4. Forwards tool calls from HTTP clients to the underlying Contentstack MCP server
 
-Each session gets its own isolated child process — different clients can use different Contentstack stacks and API groups simultaneously.
+All tools from `@contentstack/mcp` are available — CMA, CDA, Analytics, BrandKit, Launch, DeveloperHub, Lytics, and Personalize.
 
 ## Prerequisites
 
@@ -27,15 +27,34 @@ Each session gets its own isolated child process — different clients can use d
 npm install
 ```
 
-### 2. Authenticate with OAuth (one-time)
+### 2. Configure environment variables
 
-Before using CMA, Analytics, BrandKit, Launch, DeveloperHub, or Personalize tools:
+Copy the example env file and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your Contentstack credentials:
+
+```env
+CONTENTSTACK_API_KEY=your_stack_api_key
+GROUPS=cma
+```
+
+See [Environment Variables](#environment-variables) for the full list.
+
+### 3. Authenticate with OAuth
+
+Before using CMA, Analytics, BrandKit, Launch, DeveloperHub, or Personalize tools, run the OAuth flow:
 
 ```bash
 npm run auth
 ```
 
-### 3. Build and run
+This stores your OAuth tokens locally for the child process to use.
+
+### 4. Build and run
 
 ```bash
 npm run build
@@ -48,115 +67,63 @@ For development with auto-reload:
 npm run dev
 ```
 
-The server starts on port 3000 by default (`PORT` env var to change).
+The server starts on port 3000 by default.
 
 ## Connecting a Client
 
-Credentials are passed as HTTP headers (inputs) on each session. The server maps these headers to the corresponding `@contentstack/mcp` environment variables.
-
-### Input Headers
-
-| Header | Maps To | Required |
-|---|---|---|
-| `x-contentstack-api-key` | `CONTENTSTACK_API_KEY` | Yes (unless Lytics-only) |
-| `x-contentstack-delivery-token` | `CONTENTSTACK_DELIVERY_TOKEN` | CDA only |
-| `x-contentstack-brand-kit-id` | `CONTENTSTACK_BRAND_KIT_ID` | BrandKit only |
-| `x-contentstack-launch-project-id` | `CONTENTSTACK_LAUNCH_PROJECT_ID` | Launch only |
-| `x-contentstack-personalize-project-id` | `CONTENTSTACK_PERSONALIZE_PROJECT_ID` | Personalize only |
-| `x-lytics-access-token` | `LYTICS_ACCESS_TOKEN` | Lytics only |
-| `x-contentstack-groups` | `GROUPS` | No (default: `cma`) |
-
-### Cursor IDE
-
-Add to your `.cursor/mcp.json`:
+Configure your MCP client to connect via Streamable HTTP. Example `mcp-config.json`:
 
 ```json
 {
   "mcpServers": {
     "contentstack": {
       "type": "streamable-http",
-      "url": "http://localhost:3000/mcp",
-      "headers": {
-        "x-contentstack-api-key": "${input:apiKey}",
-        "x-contentstack-groups": "${input:groups}"
-      },
-      "inputs": [
-        {
-          "type": "promptString",
-          "id": "apiKey",
-          "description": "Contentstack Stack API Key",
-          "password": true
-        },
-        {
-          "type": "promptString",
-          "id": "groups",
-          "description": "API groups (cma, cda, analytics, brandkit, launch, developerhub, lytics, personalize, all)",
-          "password": false
-        }
-      ]
+      "url": "http://localhost:3000/mcp"
     }
   }
 }
 ```
 
-Cursor will prompt for these values when the MCP server is first used. They are sent as headers on every request in the session.
+### Cursor IDE
 
-### Additional inputs for other API groups
-
-Add more headers and inputs as needed. For example, to also use CDA:
+Add to your Cursor MCP settings (`.cursor/mcp.json`):
 
 ```json
 {
-  "headers": {
-    "x-contentstack-api-key": "${input:apiKey}",
-    "x-contentstack-delivery-token": "${input:deliveryToken}",
-    "x-contentstack-groups": "cma,cda"
-  },
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "apiKey",
-      "description": "Contentstack Stack API Key",
-      "password": true
-    },
-    {
-      "type": "promptString",
-      "id": "deliveryToken",
-      "description": "Contentstack Delivery Token",
-      "password": true
+  "mcpServers": {
+    "contentstack": {
+      "type": "streamable-http",
+      "url": "http://localhost:3000/mcp"
     }
-  ]
+  }
 }
 ```
 
-### Plain HTTP client
+## Environment Variables
 
-Any HTTP client can connect by including the credential headers directly:
-
-```bash
-curl -X POST http://localhost:3000/mcp \
-  -H "Content-Type: application/json" \
-  -H "x-contentstack-api-key: YOUR_API_KEY" \
-  -H "x-contentstack-groups: cma" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{}},"id":1}'
-```
-
-## Fallback to Server Environment
-
-If a header is not provided by the client, the server falls back to its own environment variables (from `.env` or the shell). This lets you set defaults on the server while allowing clients to override per-session.
+| Variable | Required | Description |
+|---|---|---|
+| `PORT` | No | Server port (default: `3000`) |
+| `CONTENTSTACK_API_KEY` | Yes | Your Stack API Key |
+| `CONTENTSTACK_DELIVERY_TOKEN` | CDA only | Delivery token for Content Delivery API |
+| `CONTENTSTACK_BRAND_KIT_ID` | BrandKit only | Brand Kit ID |
+| `CONTENTSTACK_LAUNCH_PROJECT_ID` | Launch only | Launch Project ID |
+| `CONTENTSTACK_PERSONALIZE_PROJECT_ID` | Personalize only | Personalize Project ID |
+| `LYTICS_ACCESS_TOKEN` | Lytics only | Lytics access token |
+| `GROUPS` | No | Comma-separated API groups to enable (default: `cma`). Options: `cma`, `cda`, `analytics`, `brandkit`, `launch`, `developerhub`, `lytics`, `personalize`, `all` |
 
 ## API Groups
 
-| Group | Authentication | Required Headers |
+| Group | Authentication | Required Configuration |
 |---|---|---|
-| **CMA** | OAuth | `x-contentstack-api-key` |
-| **CDA** | Token-based | `x-contentstack-api-key` + `x-contentstack-delivery-token` |
-| **Analytics** | OAuth | `x-contentstack-api-key` |
-| **BrandKit** | OAuth | `x-contentstack-api-key` + `x-contentstack-brand-kit-id` |
-| **Launch** | OAuth | `x-contentstack-api-key` + `x-contentstack-launch-project-id` |
-| **DeveloperHub** | OAuth | `x-contentstack-api-key` |
-| **Lytics** | Token-based | `x-lytics-access-token` |
-| **Personalize** | OAuth | `x-contentstack-api-key` + `x-contentstack-personalize-project-id` |
+| **CMA** | OAuth | Stack API Key |
+| **CDA** | Token-based | Stack API Key + Delivery Token |
+| **Analytics** | OAuth | Stack API Key |
+| **BrandKit** | OAuth | Stack API Key + Brand Kit ID |
+| **Launch** | OAuth | Stack API Key + Launch Project ID |
+| **DeveloperHub** | OAuth | Stack API Key |
+| **Lytics** | Token-based | Lytics Access Token |
+| **Personalize** | OAuth | Stack API Key + Personalize Project ID |
 
 ## Endpoints
 
@@ -165,7 +132,7 @@ If a header is not provided by the client, the server falls back to its own envi
 | `POST` | `/mcp` | MCP JSON-RPC requests (initialize, tool calls) |
 | `GET` | `/mcp` | SSE stream for server-to-client notifications |
 | `DELETE` | `/mcp` | Session termination |
-| `GET` | `/health` | Health check with active session count |
+| `GET` | `/health` | Health check with tool count and active sessions |
 
 ## License
 
