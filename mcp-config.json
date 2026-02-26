@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "contentstack": {
+      "type": "streamable-http",
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "x-contentstack-api-key": "${input:apiKey}",
+        "x-contentstack-groups": "${input:groups}"
+      },
+      "inputs": [
+        {
+          "type": "promptString",
+          "id": "apiKey",
+          "description": "Contentstack Stack API Key",
+          "password": true
+        },
+        {
+          "type": "promptString",
+          "id": "groups",
+          "description": "API groups to enable (cma, cda, analytics, brandkit, launch, developerhub, lytics, personalize, all)",
+          "password": false
+        }
+      ]
+    }
+  }
+}

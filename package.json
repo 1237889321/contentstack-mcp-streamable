@@ -1,0 +1,27 @@
+{
+  "name": "contentstack-mcp-streamable",
+  "version": "1.0.0",
+  "description": "Streamable HTTP MCP server that proxies @contentstack/mcp functionality over HTTP",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "nodemon --watch src --ext ts --exec \"npm run build && node build/index.js\"",
+    "auth": "npx @contentstack/mcp --auth"
+  },
+  "dependencies": {
+    "@contentstack/mcp": "^0.5.4",
+    "@modelcontextprotocol/sdk": "^1.11.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^20.11.24",
+    "nodemon": "^3.1.9",
+    "typescript": "^5.3.3"
+  }
+}
