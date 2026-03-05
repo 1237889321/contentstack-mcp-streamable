@@ -1,4 +1,6 @@
 # Contentstack MCP Streamable HTTP Server
+DEPRECATED: Contentstack will build a Streamable http server soon
+
 
 A Streamable HTTP transport wrapper for the [@contentstack/mcp](https://www.npmjs.com/package/@contentstack/mcp) package. This server exposes all Contentstack MCP tools over HTTP instead of stdio, enabling remote access, horizontal scaling, and integration with browser-based and networked MCP clients.
 
